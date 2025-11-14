@@ -18,6 +18,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Sync with upstream
+        id: sync
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -28,8 +29,45 @@ jobs:
           # Fetch upstream changes
           git fetch upstream
           
+          # Check if there are changes
+          BEFORE_SYNC=$(git rev-parse HEAD)
+          
           # Merge upstream/main into main
           git merge upstream/main --no-edit || echo "Already up to date"
           
-          # Push changes
-          git push origin main
+          AFTER_SYNC=$(git rev-parse HEAD)
+          
+          # Set output variable to indicate if changes were synced
+          if [ "$BEFORE_SYNC" != "$AFTER_SYNC" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            
+            # Get commit details for Slack message
+            COMMIT_COUNT=$(git rev-list --count $BEFORE_SYNC..$AFTER_SYNC)
+            COMMIT_LOG=$(git log --pretty=format:'• %s (%an)' $BEFORE_SYNC..$AFTER_SYNC | head -10)
+            echo "commit_count=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+            echo 'commit_log<<EOF' >> $GITHUB_OUTPUT
+            echo "$COMMIT_LOG" >> $GITHUB_OUTPUT
+            echo 'EOF' >> $GITHUB_OUTPUT
+            
+            # Push changes
+            git push origin main
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Send Slack notification
+        if: steps.sync.outputs.has_changes == 'true'
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          channel-id: ${{ secrets.SLACK_GITHUB_CHANNEL_ID }}
+          slack-message: |
+            🔄 *n8n Workflows Repository Synced*
+            
+            The fork has been updated with ${{ steps.sync.outputs.commit_count }} new commit(s) from upstream.
+            
+            *Recent Changes:*
+            ${{ steps.sync.outputs.commit_log }}
+            
+            <https://github.com/${{ github.repository }}|View Repository>
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
